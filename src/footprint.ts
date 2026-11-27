@@ -42,8 +42,8 @@ export function buildFootprint(id: string, rawPose: PiecePose, w: number, d: num
     const baseOuter = baseEdges.filter((e) => edgeCounts.get(exactKey(e.mid)) === 1);
     const frontOuter = baseOuter.filter((e) => e.yaw === yaw);
     const doorBase = frontOuter[Math.floor(frontOuter.length / 2)];
-    const stairCellIndex = storeys > 1 && cells.length >= 2 ? 0 : null;
-    const stairYaw = d === 1 && w >= 2 ? wrapYaw(yaw + 3) : yaw;
+    const stairCellIndex = storeys > 1 ? 0 : null;
+    const baseStairYaw = d === 1 && w >= 2 ? wrapYaw(yaw + 3) : yaw;
     let doorPose = pose;
     for (let k = 0; k < storeys; k++) {
         const lift = vec(steps(0), steps(k * MODULE_STEPS), steps(0));
@@ -60,15 +60,18 @@ export function buildFootprint(id: string, rawPose: PiecePose, w: number, d: num
                 add("Doorway", edgePose);
                 add("DoorLeaf", edgePose);
             }
-            else
+            else {
                 add("Wall", edgePose);
+            }
         }
         if (stairCellIndex !== null && k < storeys - 1) {
-            add("Stairs", { pos: vAdd(cells[stairCellIndex].pos, lift), yaw: stairYaw });
+            const flightYaw = k % 2 === 1 ? wrapYaw(baseStairYaw + 6) : baseStairYaw;
+            add("Stairs", { pos: vAdd(cells[stairCellIndex].pos, lift), yaw: flightYaw });
         }
     }
     const roofLift = vec(steps(0), steps(storeys * MODULE_STEPS), steps(0));
-    for (const c of cells)
-        add("Roof", { pos: vAdd(c.pos, roofLift), yaw });
+    for (let idx = 0; idx < cells.length; idx++) {
+        add("Roof", { pos: vAdd(cells[idx].pos, roofLift), yaw });
+    }
     return { id, pose, width: w, depth: d, storeys, stairCellIndex, doorPose, pieces };
 }

@@ -143,7 +143,19 @@ export function sum(xs: Iterable<Exact>): Exact {
 }
 
 function bitLength(mag: bigint): number {
-    return mag === 0n ? 0 : mag.toString(2).length;
+    if (mag <= 0n)
+        return 0;
+    let v = mag;
+    let bits = 0;
+    while (v >= (1n << 64n)) {
+        v >>= 64n;
+        bits += 64;
+    }
+    while (v >= (1n << 32n)) {
+        v >>= 32n;
+        bits += 32;
+    }
+    return bits + (32 - Math.clz32(Number(v)));
 }
 
 /** Shift |n| down to at most 53 bits with round-to-nearest-even, returning m * 2^shift ≈ n. */

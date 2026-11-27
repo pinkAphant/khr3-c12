@@ -205,6 +205,11 @@ export function yawToQuaternion(radians: number): [number, number, number, numbe
     return [0, Math.sin(radians / 2), 0, Math.cos(radians / 2)];
 }
 
+/** Exact C12 yaw index (0..11) converted via exact SO(3) `rotY` to unit quaternion `[x, y, z, w]`. */
+export function yawStepToQuaternion(yaw: Yaw): [number, number, number, number] {
+    return mToQuaternion(rotY(yaw));
+}
+
 /** A slope that rises `rise` over a run of `run` (both in metres): how long it is, and its angle in radians. */
 export function slopeToFloat(rise: number, run: number): { length: number; angle: number } {
     return { length: Math.hypot(rise, run), angle: Math.atan2(rise, run) };

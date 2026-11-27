@@ -4,13 +4,14 @@
  * snapping is an exact equation so a ring of 6 equilateral triangle foundations
  * closes on itself with zero drift.
  */
-import { type Exact, HALF_ROOT3, ROOT3, ZERO, half, neg } from "./scalar.js";
+import { type Exact, HALF_ROOT3, ROOT3, ZERO, half } from "./scalar.js";
 import {
     type ExactVec3,
     type ExactVec3JSON,
     type Yaw,
     V_ZERO,
     mApply,
+    mToQuaternion,
     rotY,
     vAdd,
     vEq,
@@ -24,7 +25,17 @@ import {
 import { MODULE, MODULE_STEPS, steps, stepsToFloat, yawToFloat } from "./transform.js";
 
 export const PIECE_KINDS = [
-    "FoundationSquare", "FoundationTriangle", "Street", "Wall", "Doorway", "DoorLeaf", "Floor", "Roof", "Stairs",
+    "FoundationSquare",
+    "FoundationTriangle",
+    "Street",
+    "Wall",
+    "Doorway",
+    "DoorLeaf",
+    "Floor",
+    "FloorTriangle",
+    "Roof",
+    "RoofTriangle",
+    "Stairs",
 ] as const;
 
 export type PieceKind = (typeof PIECE_KINDS)[number];
@@ -101,10 +112,14 @@ export function localSockets(kind: PieceKind): Socket[] {
             { kind: "cell", mid: V_ZERO, yaw: 0 },
         ];
     }
+    if (kind === "FoundationTriangle" || kind === "FloorTriangle") {
+        return [
+            ...TRI_EDGE_YAWS.map((yaw): Socket => ({ kind: "edge", mid: along(yaw, TRI_IN), yaw })),
+            top,
+        ];
+    }
     if (kind === "Street")
         return [0, 3, 6, 9].map((yaw): Socket => ({ kind: "edge", mid: along(yaw, HALF_SIDE), yaw }));
-    if (kind === "FoundationTriangle")
-        return TRI_EDGE_YAWS.map((yaw): Socket => ({ kind: "edge", mid: along(yaw, TRI_IN), yaw }));
     return [];
 }
 
@@ -117,7 +132,7 @@ export const worldSockets = (kind: PieceKind, pose: PiecePose): Socket[] => loca
 
 /** Which kind of socket a piece is placed on. */
 export function socketFor(kind: PieceKind): SocketKind {
-    if (kind === "Floor" || kind === "Roof")
+    if (kind === "Floor" || kind === "FloorTriangle" || kind === "Roof" || kind === "RoofTriangle")
         return "top";
     return kind === "Stairs" ? "cell" : "edge";
 }
@@ -141,10 +156,15 @@ export type PiecePoseJSON = readonly [ExactVec3JSON, number];
 export const poseToJSON = (p: PiecePose): PiecePoseJSON => [vToJSON(p.pos), wrapYaw(p.yaw)];
 export const poseFromJSON = (j: PiecePoseJSON): PiecePose => ({ pos: vFromJSON(j[0]), yaw: wrapYaw(j[1]) });
 
-/** The pose as floats: position in metres and yaw in radians. */
-export const poseToFloat = (p: PiecePose): { position: [number, number, number]; yaw: number } => ({
+/** The pose as floats: position in metres, yaw in radians, and unit quaternion `[x, y, z, w]`. */
+export const poseToFloat = (p: PiecePose): {
+    position: [number, number, number];
+    yaw: number;
+    quaternion: [number, number, number, number];
+} => ({
     position: vToFloat(p.pos),
     yaw: yawToFloat(p.yaw),
+    quaternion: mToQuaternion(rotY(p.yaw)),
 });
 
 /** A pose on the ground lattice: x and z in 0.25 m steps, yaw in twelfths of a turn. */

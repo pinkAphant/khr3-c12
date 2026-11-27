@@ -1,8 +1,9 @@
 /**
  * Road-aware C12 settlements: village through ginormous city on any structural `RoadLike` spline.
  */
-import { vec } from "./rotation.js";
-import { steps, nearestYaw, yawToFloat, MODULE_METRES, MODULE_STEPS } from "./transform.js";
+import { toFloat } from "./scalar.js";
+import { vec, yawCos, yawSin } from "./rotation.js";
+import { steps, nearestYaw, MODULE_METRES, MODULE_STEPS } from "./transform.js";
 import { type PlacedPiece } from "./pieces.js";
 import { type Building, buildFootprint } from "./footprint.js";
 
@@ -65,6 +66,7 @@ interface FrontageLot {
     front: RoadV3;
     facing: RoadV3;
     groundY: number;
+    hasBuilding: boolean;
 }
 
 interface OBB2D {
@@ -76,6 +78,7 @@ interface OBB2D {
     vz: number;
     hw: number;
     hd: number;
+    radius: number;
 }
 
 function mulberry32(seed: number): () => number {
@@ -105,7 +108,7 @@ function frontage(road: RoadLike, spacing: number, setback: number): FrontageLot
             const k = (side === "left" ? 1 : -1) * (road.halfWidth + setback);
             const front: RoadV3 = [f.pos[0] + f.left[0] * k, f.pos[1], f.pos[2] + f.left[2] * k];
             const facing: RoadV3 = side === "left" ? [-f.left[0], 0, -f.left[2]] : [f.left[0], 0, f.left[2]];
-            out.push({ s, front, facing, groundY: f.pos[1] });
+            out.push({ s, front, facing, groundY: f.pos[1], hasBuilding: false });
         }
     }
     return out;
@@ -113,11 +116,12 @@ function frontage(road: RoadLike, spacing: number, setback: number): FrontageLot
 
 const int = (rng: () => number, [lo, hi]: [number, number]): number => lo + Math.floor(rng() * (hi - lo + 1));
 const STEP_M = MODULE_METRES / MODULE_STEPS;
+const GRID_CELL = 16;
 
 function makeOBB(cx: number, cz: number, yaw: number, hw: number, hd: number): OBB2D {
-    const th = yawToFloat(yaw);
-    const c = Math.cos(th), s = Math.sin(th);
-    return { cx, cz, ux: c, uz: -s, vx: s, vz: c, hw, hd };
+    const c = toFloat(yawCos(yaw));
+    const s = toFloat(yawSin(yaw));
+    return { cx, cz, ux: c, uz: -s, vx: s, vz: c, hw, hd, radius: Math.hypot(hw, hd) };
 }
 
 function obbOverlap(a: OBB2D, b: OBB2D, margin = 0): boolean {
@@ -133,13 +137,58 @@ function obbOverlap(a: OBB2D, b: OBB2D, margin = 0): boolean {
     return true;
 }
 
+class SpatialOBBGrid {
+    private readonly cells = new Map<string, OBB2D[]>();
+
+    insert(obb: OBB2D): void {
+        const x0 = Math.floor((obb.cx - obb.radius) / GRID_CELL);
+        const x1 = Math.floor((obb.cx + obb.radius) / GRID_CELL);
+        const z0 = Math.floor((obb.cz - obb.radius) / GRID_CELL);
+        const z1 = Math.floor((obb.cz + obb.radius) / GRID_CELL);
+        for (let gx = x0; gx <= x1; gx++) {
+            for (let gz = z0; gz <= z1; gz++) {
+                const key = `${gx},${gz}`;
+                let bucket = this.cells.get(key);
+                if (!bucket) {
+                    bucket = [];
+                    this.cells.set(key, bucket);
+                }
+                bucket.push(obb);
+            }
+        }
+    }
+
+    overlapsAny(obb: OBB2D, margin = 0): boolean {
+        const reach = obb.radius + margin;
+        const x0 = Math.floor((obb.cx - reach) / GRID_CELL);
+        const x1 = Math.floor((obb.cx + reach) / GRID_CELL);
+        const z0 = Math.floor((obb.cz - reach) / GRID_CELL);
+        const z1 = Math.floor((obb.cz + reach) / GRID_CELL);
+        const seen = new Set<OBB2D>();
+        for (let gx = x0; gx <= x1; gx++) {
+            for (let gz = z0; gz <= z1; gz++) {
+                const bucket = this.cells.get(`${gx},${gz}`);
+                if (!bucket)
+                    continue;
+                for (const other of bucket) {
+                    if (seen.has(other))
+                        continue;
+                    seen.add(other);
+                    if (obbOverlap(obb, other, margin))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+}
+
 function buildRoadClearance(road: RoadLike): (obb: OBB2D, minDist: number) => boolean {
-    const cell = 16;
     const buckets = new Map<string, [number, number][]>();
     const n = Math.max(1, Math.ceil(road.length));
     for (let i = 0; i <= n; i++) {
         const [px, , pz] = road.at((i / n) * road.length).pos;
-        const k = `${Math.floor(px / cell)},${Math.floor(pz / cell)}`;
+        const k = `${Math.floor(px / GRID_CELL)},${Math.floor(pz / GRID_CELL)}`;
         let list = buckets.get(k);
         if (!list) {
             list = [];
@@ -148,10 +197,10 @@ function buildRoadClearance(road: RoadLike): (obb: OBB2D, minDist: number) => bo
         list.push([px, pz]);
     }
     return (obb: OBB2D, minDist: number): boolean => {
-        const reach = Math.hypot(obb.hw, obb.hd) + minDist;
+        const reach = obb.radius + minDist;
         const minSq = minDist * minDist;
-        for (let gx = Math.floor((obb.cx - reach) / cell); gx <= Math.floor((obb.cx + reach) / cell); gx++) {
-            for (let gz = Math.floor((obb.cz - reach) / cell); gz <= Math.floor((obb.cz + reach) / cell); gz++) {
+        for (let gx = Math.floor((obb.cx - reach) / GRID_CELL); gx <= Math.floor((obb.cx + reach) / GRID_CELL); gx++) {
+            for (let gz = Math.floor((obb.cz - reach) / GRID_CELL); gz <= Math.floor((obb.cz + reach) / GRID_CELL); gz++) {
                 for (const [px, pz] of buckets.get(`${gx},${gz}`) ?? []) {
                     const dx = px - obb.cx, dz = pz - obb.cz;
                     const ox = Math.max(0, Math.abs(dx * obb.ux + dz * obb.uz) - obb.hw);
@@ -177,10 +226,11 @@ export function planSettlement(road: RoadLike, tier: SettlementTier, seed: numbe
     const lots = frontage(road, rule.spacing, setback).filter((l) => l.s >= s0 && l.s <= s1);
     const clearOfRoad = buildRoadClearance(road);
     const bRoadMin = road.halfWidth + Math.max(0.75, Math.min(1.5, baseSetback + 0.75));
-    const buildingOBBs: OBB2D[] = [];
-    const streetOBBs: OBB2D[] = [];
+    const buildingGrid = new SpatialOBBGrid();
+    const streetGrid = new SpatialOBBGrid();
     const buildings: Building[] = [];
     const streets: PlacedPiece[] = [];
+
     for (const lot of lots) {
         const yaw = nearestYaw(lot.facing[0], lot.facing[2]);
         for (let row = 0; row < rule.rows; row++) {
@@ -193,13 +243,17 @@ export function planSettlement(road: RoadLike, tier: SettlementTier, seed: numbe
             const ySteps = Math.floor(lot.groundY / STEP_M);
             const zSteps = Math.round((lot.front[2] - lot.facing[2] * back) / STEP_M);
             const obb = makeOBB(xSteps * STEP_M, zSteps * STEP_M, yaw, (w * MODULE_METRES) / 2, depthM / 2);
-            if (!clearOfRoad(obb, bRoadMin) || buildingOBBs.some((prev) => obbOverlap(obb, prev, 0.5)))
+            if (!clearOfRoad(obb, bRoadMin) || buildingGrid.overlapsAny(obb, 0.5))
                 continue;
-            buildingOBBs.push(obb);
+            buildingGrid.insert(obb);
+            lot.hasBuilding = true;
             buildings.push(buildFootprint(`${tier}-${buildings.length}`, { pos: vec(steps(xSteps), steps(ySteps), steps(zSteps)), yaw }, w, d, h));
         }
     }
+
     for (const lot of lots) {
+        if (!lot.hasBuilding)
+            continue;
         const yaw = nearestYaw(lot.facing[0], lot.facing[2]);
         const sxSteps = Math.round((lot.front[0] + lot.facing[0] * (streetBand - MODULE_METRES * 0.5)) / STEP_M);
         const sySteps = Math.floor(lot.groundY / STEP_M);
@@ -207,10 +261,11 @@ export function planSettlement(road: RoadLike, tier: SettlementTier, seed: numbe
         const sObb = makeOBB(sxSteps * STEP_M, szSteps * STEP_M, yaw, MODULE_METRES / 2, MODULE_METRES / 2);
         if (!clearOfRoad(sObb, road.halfWidth + 0.6))
             continue;
-        if (streetOBBs.some((prev) => obbOverlap(sObb, prev, 0.05)) || buildingOBBs.some((b) => obbOverlap(sObb, b, 0.05)))
+        if (streetGrid.overlapsAny(sObb, 0.05) || buildingGrid.overlapsAny(sObb, 0.05))
             continue;
-        streetOBBs.push(sObb);
+        streetGrid.insert(sObb);
         streets.push({ id: `${tier}-street-${streets.length}`, kind: "Street", pose: { pos: vec(steps(sxSteps), steps(sySteps), steps(szSteps)), yaw } });
     }
+
     return { tier, seed, streets, buildings, pieces: [...streets, ...buildings.flatMap((b) => b.pieces)] };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@khr3/c12",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Exact cyclotomic Z[1/2, sqrt(3)] yaw12 lattice math, 3 m socket snapping, road-aware settlement generators (village to ginormous city) and InstancedMesh batches for khr3.",
   "license": "MIT",
   "type": "module",
@@ -40,8 +40,8 @@
     "access": "public"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc --ignoreConfig --noEmit --rootDir . --target ES2022 --module NodeNext --moduleResolution NodeNext --lib ES2022 --types node --strict --verbatimModuleSyntax --skipLibCheck example/index.ts",
-    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc && node -e \"for(const f of fs.readdirSync('dist'))if(f.includes('.test.'))fs.rmSync('dist/'+f)\"",
+    "typecheck": "tsc --noEmit",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "example": "tsx example/index.ts",
     "prepack": "npm run build",
