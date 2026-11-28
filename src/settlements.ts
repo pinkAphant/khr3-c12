@@ -104,10 +104,13 @@ function frontage(road: RoadLike, spacing: number, setback: number): FrontageLot
     const out: FrontageLot[] = [];
     for (let s = margin; s <= road.length - margin + 1e-9; s += spacing) {
         const f = road.at(s);
+        const lLen = Math.hypot(f.left[0], f.left[2]);
+        const lx = lLen > 1e-8 ? f.left[0] / lLen : 1;
+        const lz = lLen > 1e-8 ? f.left[2] / lLen : 0;
         for (const side of ["left", "right"] as const) {
             const k = (side === "left" ? 1 : -1) * (road.halfWidth + setback);
-            const front: RoadV3 = [f.pos[0] + f.left[0] * k, f.pos[1], f.pos[2] + f.left[2] * k];
-            const facing: RoadV3 = side === "left" ? [-f.left[0], 0, -f.left[2]] : [f.left[0], 0, f.left[2]];
+            const front: RoadV3 = [f.pos[0] + lx * k, f.pos[1], f.pos[2] + lz * k];
+            const facing: RoadV3 = side === "left" ? [-lx, 0, -lz] : [lx, 0, lz];
             out.push({ s, front, facing, groundY: f.pos[1], hasBuilding: false });
         }
     }
@@ -159,7 +162,7 @@ class SpatialOBBGrid {
     }
 
     overlapsAny(obb: OBB2D, margin = 0): boolean {
-        const reach = obb.radius + margin;
+        const reach = obb.radius + margin * Math.SQRT2;
         const x0 = Math.floor((obb.cx - reach) / GRID_CELL);
         const x1 = Math.floor((obb.cx + reach) / GRID_CELL);
         const z0 = Math.floor((obb.cz - reach) / GRID_CELL);

@@ -87,13 +87,46 @@ export function canPlace(existing: readonly PlacedPiece[], kind: PieceKind, rawP
     const here: Socket = { kind: "edge", mid: pose.pos, yaw: pose.yaw };
 
     const wallEdgeKeys = new Set<string>();
-    const bases: PlacedPiece[] = [];
+    const baseEdgeKeys = new Set<string>();
+    const slabEdgesByKind = new Map<PieceKind, Array<{ yaw: Yaw; edges: ReadonlySet<string> }>>();
+    const triTopBases = new Map<string, PlacedPiece>();
+    const sqTopBases = new Map<string, PlacedPiece>();
+    const sqCellBases = new Map<string, PlacedPiece>();
+    const stairByPos = new Map<string, PlacedPiece>();
+    const floorOrRoofKeys = new Set<string>();
+
     for (const p of existing) {
         const pPose: PiecePose = { pos: p.pose.pos, yaw: wrapYaw(p.pose.yaw) };
         if (isEdgePiece(p.kind))
             wallEdgeKeys.add(canonicalEdgeKey(pPose.pos, pPose.yaw));
+        if (p.kind === "Floor" || p.kind === "Roof")
+            floorOrRoofKeys.add(exactVecKey(pPose.pos));
+        if (p.kind === "Stairs")
+            stairByPos.set(exactVecKey(pPose.pos), p);
+        if (p.kind === "Floor" || p.kind === "Roof" || p.kind === "FloorTriangle" || p.kind === "RoofTriangle") {
+            const tmpl: PieceKind = isTriangleSlab(p.kind) ? "FoundationTriangle" : "FoundationSquare";
+            const edges = new Set<string>();
+            for (const s of worldSockets(tmpl, pPose)) {
+                if (s.kind === "edge")
+                    edges.add(canonicalEdgeKey(s.mid, s.yaw));
+            }
+            let list = slabEdgesByKind.get(p.kind);
+            if (!list) {
+                list = [];
+                slabEdgesByKind.set(p.kind, list);
+            }
+            list.push({ yaw: pPose.yaw, edges });
+        }
         if (p.kind === "FoundationSquare" || p.kind === "FoundationTriangle" || p.kind === "Floor" || p.kind === "FloorTriangle") {
-            bases.push(p);
+            const tri = isTriangleSlab(p.kind);
+            for (const s of worldSockets(p.kind, pPose)) {
+                if (s.kind === "edge")
+                    baseEdgeKeys.add(canonicalEdgeKey(s.mid, s.yaw));
+                else if (s.kind === "top")
+                    (tri ? triTopBases : sqTopBases).set(exactVecKey(s.mid), p);
+                else if (s.kind === "cell" && !tri)
+                    sqCellBases.set(exactVecKey(s.mid), p);
+            }
         }
 
         if (slab && isSlab(p.kind)) {
@@ -121,7 +154,8 @@ export function canPlace(existing: readonly PlacedPiece[], kind: PieceKind, rawP
 
     const oneStoreyUp = vec(ZERO, STOREY, ZERO);
     if (isEdgePiece(kind)) {
-        const heldByBase = bases.some((b) => worldSockets(b.kind, b.pose).some((s) => s.kind === "edge" && sameEdge(s, here)));
+        const hereEdgeKey = canonicalEdgeKey(pose.pos, pose.yaw);
+        const heldByBase = baseEdgeKeys.has(hereEdgeKey);
         const lowerEdgeKey = canonicalEdgeKey(vSub(pose.pos, oneStoreyUp), pose.yaw);
         const heldByWall = wallEdgeKeys.has(lowerEdgeKey);
         return heldByBase || heldByWall ? { ok: true, reason: "" } : { ok: false, reason: `a ${kind} needs a foundation, floor, or wall below` };
@@ -131,25 +165,24 @@ export function canPlace(existing: readonly PlacedPiece[], kind: PieceKind, rawP
         worldSockets(cellKind, cellPose).some((e) => e.kind === "edge" && wallEdgeKeys.has(canonicalEdgeKey(e.mid, e.yaw)));
 
     const hasAdjSlab = (slabKind: PieceKind, slabPose: PiecePose): boolean => {
+        const peers = slabEdgesByKind.get(slabKind);
+        if (!peers || peers.length === 0)
+            return false;
         const tri = isTriangleSlab(slabKind);
         const templateKind: PieceKind = tri ? "FoundationTriangle" : "FoundationSquare";
-        const myEdges = new Set(
-            worldSockets(templateKind, slabPose).filter((e) => e.kind === "edge").map((e) => canonicalEdgeKey(e.mid, e.yaw)),
-        );
-        for (const p of existing) {
-            if (p.kind !== slabKind)
+        const myEdges = worldSockets(templateKind, slabPose).filter((e) => e.kind === "edge").map((e) => canonicalEdgeKey(e.mid, e.yaw));
+        for (const peer of peers) {
+            if (!tri && wrapYaw(peer.yaw - slabPose.yaw) % 3 !== 0)
                 continue;
-            if (!tri && wrapYaw(p.pose.yaw - slabPose.yaw) % 3 !== 0)
-                continue;
-            const pEdges = worldSockets(templateKind, p.pose);
-            if (pEdges.some((pe) => pe.kind === "edge" && myEdges.has(canonicalEdgeKey(pe.mid, pe.yaw))))
+            if (myEdges.some((k) => peer.edges.has(k)))
                 return true;
         }
         return false;
     };
 
+    const poseKey = exactVecKey(pose.pos);
     if (kind === "FloorTriangle" || kind === "RoofTriangle") {
-        const below = bases.find((b) => isTriangleSlab(b.kind) && worldSockets(b.kind, b.pose).some((s) => s.kind === "top" && vEq(s.mid, pose.pos)));
+        const below = triTopBases.get(poseKey);
         if (!below)
             return { ok: false, reason: `a ${kind} needs a triangle foundation or triangle floor one storey below it` };
         if (wrapYaw(pose.yaw - below.pose.yaw) % 4 !== 0)
@@ -160,13 +193,13 @@ export function canPlace(existing: readonly PlacedPiece[], kind: PieceKind, rawP
     }
 
     if (kind === "Floor" || kind === "Roof") {
-        const stairAtCell = existing.some((p) => p.kind === "Stairs" && vEq(p.pose.pos, pose.pos));
-        const stairOneBelow = existing.find((p) => p.kind === "Stairs" && vEq(vAdd(p.pose.pos, oneStoreyUp), pose.pos));
+        const stairAtCell = stairByPos.has(poseKey);
+        const stairOneBelow = stairByPos.get(exactVecKey(vSub(pose.pos, oneStoreyUp)));
         if (kind === "Floor" && (stairAtCell || stairOneBelow))
             return { ok: false, reason: "a Floor cannot cap or occupy a stairwell cell" };
         if (kind === "Roof" && stairOneBelow)
             return { ok: false, reason: "a flat Roof cannot directly cap an open stairwell one storey below" };
-        const below = bases.find((b) => !isTriangleSlab(b.kind) && worldSockets(b.kind, b.pose).some((s) => s.kind === "top" && vEq(s.mid, pose.pos)));
+        const below = sqTopBases.get(poseKey);
         if (below) {
             if (wrapYaw(pose.yaw - below.pose.yaw) % 3 !== 0)
                 return { ok: false, reason: `${kind} yaw must align in 90° steps with support below` };
@@ -175,9 +208,10 @@ export function canPlace(existing: readonly PlacedPiece[], kind: PieceKind, rawP
                 : { ok: false, reason: `a ${kind} needs a wall under one of its edges` };
         }
         if (kind === "Roof") {
-            const twoStoreysUp = vAdd(oneStoreyUp, oneStoreyUp);
-            const stairBelow = !stairAtCell
-                ? existing.find((p) => p.kind === "Stairs" && vEq(vAdd(p.pose.pos, twoStoreysUp), pose.pos) && !existing.some((u) => u.kind === "Stairs" && vEq(u.pose.pos, vAdd(p.pose.pos, oneStoreyUp))))
+            const twoStoreysDownPos = vSub(vSub(pose.pos, oneStoreyUp), oneStoreyUp);
+            const candidateStair = !stairAtCell ? stairByPos.get(exactVecKey(twoStoreysDownPos)) : undefined;
+            const stairBelow = candidateStair && !stairByPos.has(exactVecKey(vAdd(candidateStair.pose.pos, oneStoreyUp)))
+                ? candidateStair
                 : undefined;
             if (stairBelow) {
                 if (wrapYaw(pose.yaw - stairBelow.pose.yaw) % 3 !== 0)
@@ -192,12 +226,12 @@ export function canPlace(existing: readonly PlacedPiece[], kind: PieceKind, rawP
 
     // Stairs
     const topPos = vAdd(pose.pos, oneStoreyUp);
-    if (existing.some((p) => (p.kind === "Floor" || p.kind === "Roof") && vEq(p.pose.pos, topPos)))
+    if (floorOrRoofKeys.has(exactVecKey(topPos)))
         return { ok: false, reason: "stairs cannot rise into a solid floor or flat roof above" };
-    const baseCell = bases.find((b) => !isTriangleSlab(b.kind) && worldSockets(b.kind, b.pose).some((s) => s.kind === "cell" && vEq(s.mid, pose.pos)));
+    const baseCell = sqCellBases.get(poseKey);
     if (baseCell)
         return wrapYaw(pose.yaw - baseCell.pose.yaw) % 3 === 0 ? { ok: true, reason: "" } : { ok: false, reason: "stairs yaw must align in 90° steps with base below" };
-    const stairUnder = existing.find((p) => p.kind === "Stairs" && vEq(vAdd(p.pose.pos, oneStoreyUp), pose.pos));
+    const stairUnder = stairByPos.get(exactVecKey(vSub(pose.pos, oneStoreyUp)));
     if (stairUnder) {
         if (wrapYaw(pose.yaw - stairUnder.pose.yaw) % 3 !== 0)
             return { ok: false, reason: "stairs yaw must align in 90° steps with stairs below" };

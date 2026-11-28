@@ -124,20 +124,40 @@ describe("@khr3/c12 exact cyclotomic lattice", () => {
         assert.equal(mat[2], -0.5);
     });
 
-    it("generates collision-free road settlements and column-major InstancedMesh batches in O(N)", () => {
-        const road: RoadLike = {
+    it("generates collision-free road settlements (including banked 3D roads) and column-major InstancedMesh batches in O(N)", () => {
+        const bankedRoad: RoadLike = {
             halfWidth: 4,
             length: 900,
-            at: (s) => ({ s, pos: [0, 0, s], tangent: [0, 0, 1], left: [1, 0, 0] }),
+            // Non-unit horizontal left projection (banked 60°: |left_xz| = 0.5) must still maintain full horizontal road setback
+            at: (s) => ({ s, pos: [0, s * 0.02, s], tangent: [0, 0.02, 1], left: [0.5, Math.sqrt(3) / 2, 0] }),
         };
-        const settlement = planSettlement(road, "city_medium", 77);
+        const settlement = planSettlement(bankedRoad, "city_medium", 77);
         assert.ok(settlement.buildings.length > 0);
         assert.ok(settlement.streets.length > 0);
         assert.ok(settlement.streets.length <= settlement.buildings.length);
+        for (const b of settlement.buildings) {
+            const cx = toFloat(b.pose.pos.x);
+            const halfW = (b.depth * SIDE_METRES) / 2;
+            assert.ok(Math.abs(cx) - halfW >= bankedRoad.halfWidth + 0.5, `Building ${b.id} encroached on banked road: cx=${cx}`);
+        }
         const batches = instanceBatches(settlement.pieces);
         assert.ok(batches.length > 0);
         for (const batch of batches) {
             assert.equal(batch.matrices.length, batch.count * 16);
         }
+
+        // Verify cantilever floor placement supported by an adjacent Floor cell
+        const fA = latticePose(0, 0, 0);
+        const fB = latticePose(12, 0, 0);
+        const wA = snapPose("Wall", worldSockets("FoundationSquare", fA).find((s) => s.kind === "edge" && s.yaw === 0)!);
+        const floorA = snapPose("Floor", worldSockets("FoundationSquare", fA).find((s) => s.kind === "top")!);
+        const floorB = snapPose("Floor", worldSockets("FoundationSquare", fB).find((s) => s.kind === "top")!);
+        const study: PlacedPiece[] = [
+            { id: "fa", kind: "FoundationSquare", pose: fA },
+            { id: "fb", kind: "FoundationSquare", pose: fB },
+            { id: "wa", kind: "Wall", pose: wA },
+            { id: "fla", kind: "Floor", pose: floorA },
+        ];
+        assert.equal(canPlace(study, "Floor", floorB).ok, true, "Adjacent Floor must support neighbouring Floor over FoundationSquare");
     });
 });

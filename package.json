@@ -1,6 +1,6 @@
 {
   "name": "@khr3/c12",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Exact cyclotomic Z[1/2, sqrt(3)] yaw12 lattice math, 3 m socket snapping, road-aware settlement generators (village to ginormous city) and InstancedMesh batches for khr3.",
   "license": "MIT",
   "type": "module",
